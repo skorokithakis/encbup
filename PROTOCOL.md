@@ -1,4 +1,4 @@
-# The thread model
+# The threat model
 
 The threat model `encbup` is designed to protect against is file backup from a trusted server to untrusted sources
 through untrusted connections.
