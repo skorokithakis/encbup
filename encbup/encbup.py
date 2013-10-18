@@ -1,0 +1,291 @@
+"""encbup.
+
+Usage:
+  encbup.py [options] --encrypt <outfile> <path> ...
+  encbup.py [options] --decrypt <infile> <directory>
+
+Options:
+  -h --help                        Show this screen.
+  -s --salt=<salt>                 The salt used for the key.
+  -p --passphrase=<passphrase>     The encryption passphrase used.
+  -r --rounds=<rounds>             The number of rounds used for PBKDF2i [default: 20000].
+  -v --verbose                     Say more things.
+     --version                     Show version.
+"""
+
+import base64
+import hmac
+import hashlib
+import json
+import logging
+import os
+import sys
+
+from Crypto import Random
+from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Cipher import AES
+from docopt import docopt
+from getpass import getpass
+
+
+PROTOCOL_VERSION = 1
+BLOCK_SIZE = 64 * 1024
+
+
+class File:
+    def __init__(self, key, path, filename):
+        self.block_size = BLOCK_SIZE
+        self._path = path
+        self._filename = filename
+        self._key = key
+
+    def read_blocks(self, block_size=None):
+        if block_size is None:
+            block_size = self.block_size
+        infile = open(self.absolute_path)
+        while True:
+            block = infile.read(block_size)
+            if block:
+                yield block
+            else:
+                return
+
+    def pad(self, data):
+        """
+        Pad `data` as per PKCS#7.
+        """
+        length = 16 - (len(data) % 16)
+        return data + chr(length) * length
+
+    def hmac(self):
+        if getattr(self, "_hmac", None) is None:
+            h = hmac.new(self._key.key, digestmod=hashlib.sha512)
+            infile = open(self.absolute_path)
+            for block in self.read_blocks():
+                h.update(block)
+            infile.close()
+            self._hmac = h
+        return self._hmac
+
+    def encrypted(self):
+        # Set the IV as the first 16 bytes of the file's HMAC, so the same plaintext
+        # always encrypts to the same ciphertext for a given key.
+        self._cipher = AES.new(self._key.key, AES.MODE_CBC, IV=self.iv)
+        infile = open(self.absolute_path)
+
+        yield self.iv
+        for block in self.read_blocks():
+            if len(block) < self.block_size:
+                yield self._cipher.encrypt(self.pad(block))
+                break
+            else:
+                yield self._cipher.encrypt(block)
+        else:
+            yield self.pad("")
+
+        infile.close()
+        return
+
+    @property
+    def iv(self):
+        return self.hmac().digest()[:16]
+
+    @property
+    def absolute_path(self):
+        return os.path.join(self._path, self._filename)
+
+    @property
+    def relative_path(self):
+        return self._filename
+
+    @property
+    def encrypted_relative_path(self):
+        iv = self.hmac().digest()[-16:]
+        cipher = AES.new(self._key.key, AES.MODE_CBC, IV=iv)
+        return iv + cipher.encrypt(self.pad(self.relative_path))
+
+    @property
+    def encrypted_size(self):
+        padding_length = 16 - (self.size % 16)
+        return 16 + self.size + padding_length
+
+    @property
+    def size(self):
+        return os.path.getsize(self.absolute_path)
+
+    @property
+    def as_dict(self):
+        return {
+            "plaintext_digest": self.hmac().hexdigest(),
+            "size": self.encrypted_size,
+            "filename": self.encrypted_relative_path.encode("hex"),
+            }
+
+
+class Key:
+    def __init__(self, passphrase, salt=None, rounds=20000):
+        if salt is None:
+            salt = self.generate_salt()
+        self.salt = salt
+        self.rounds = rounds
+        self.key = PBKDF2(passphrase, salt, count=rounds)
+
+    def generate_salt(self):
+        return base64.b64encode(Random.new().read(8))
+
+    @property
+    def hexdigest(self):
+        return hashlib.sha512(self.key).hexdigest()
+
+    @property
+    def as_dict(self):
+        return {"filename": ".encbup.json", "size": len(self.contents)}
+
+    @property
+    def contents(self):
+        return json.dumps({"digest": self.hexdigest, "salt": self.salt, "rounds": self.rounds})
+
+
+class Reader:
+    def __init__(self, filename, base_dir):
+        if filename == "-":
+            self.file = sys.stdin
+        else:
+            self.file = open(filename)
+        self._base_dir = base_dir
+
+    def unpad(self, data):
+        """
+        Unpad `data` as per PKCS#7.
+        """
+        length = ord(data[-1])
+        return data[:-length]
+
+    def process_stream(self, passphrase):
+        version = self.file.readline()
+        state = 0
+
+        # Read protocol version.
+        if int(version) > PROTOCOL_VERSION:
+            sys.exit("Unsupported protocol version.")
+
+        # Read keyfile.
+        metadata = json.loads(self.file.readline())
+        keyfile = json.loads(self.file.read(metadata["size"] + 1))
+        key = Key(passphrase, keyfile["salt"], rounds=keyfile["rounds"])
+        if key.hexdigest != keyfile["digest"]:
+            sys.exit("Wrong passphrase.")
+
+        while True:
+            if state == 0:
+                # Read metadata.
+                metadata = self.file.readline()
+                if not metadata:
+                    return
+                metadata = json.loads(metadata)
+
+                # Decrypt the filename.
+                encrypted_filename = metadata["filename"].decode("hex")
+                cipher = AES.new(key.key, AES.MODE_CBC, IV=encrypted_filename[:16])
+                filename = self.unpad(cipher.decrypt(encrypted_filename[16:]))
+                logging.debug("Decrypting {0}...".format(filename))
+
+                pathname = os.path.join(self._base_dir, filename)
+                # Create parent directories.
+                if not os.path.exists(os.path.dirname(pathname)):
+                    os.makedirs(os.path.dirname(pathname))
+                outfile = open(pathname, "wb")
+
+                # Read the IV and prepare the cipher.
+                cipher = AES.new(key.key, AES.MODE_CBC, IV=self.file.read(16))
+                size = metadata["size"] - 16
+                state = 1
+            else:
+                block_size = min(BLOCK_SIZE, size)
+                data = self.file.read(block_size)
+                plaintext = cipher.decrypt(data)
+                if block_size < BLOCK_SIZE:
+                    plaintext = self.unpad(plaintext)
+                outfile.write(plaintext)
+                size -= block_size
+                if size == 0:
+                    self.file.read(1)  # Skip the newline.
+                    state = 0
+                    outfile.close()
+
+
+class Writer:
+    """
+    A class for writing encrypted data to a file (or stdout).
+    """
+    def __init__(self, filename):
+        if filename == "-":
+            self.file = sys.stdout
+        else:
+            self.file = open(filename, "wb")
+
+    def walk(self, path):
+        """
+        Recurse down the given `path`, returning filenames relative to it, if it is a directory.
+        If not, return path itself.
+        """
+        if not os.path.isdir(path):
+            yield os.path.split(path)
+        else:
+            for dirpath, dirnames, filenames in os.walk(path):
+                for filename in filenames:
+                    relpath = os.path.relpath(os.path.join(dirpath, filename), path)
+                    yield path, relpath
+
+    def write(self, line="", terminate=True):
+        """
+        Write a newline-terminated line to a file.
+        """
+        self.file.write(line)
+        if terminate:
+            self.file.write("\n")
+
+    def write_preamble(self, key):
+        self.write(str(PROTOCOL_VERSION))
+        self.write(json.dumps(key.as_dict))
+        self.write(key.contents)
+
+    def write_files(self, paths):
+        for path in paths:
+            for root, filename in self.walk(path):
+                logging.debug("Encrypting {0}...".format(filename))
+                infile = File(key, root, filename)
+                self.write(json.dumps(infile.as_dict))
+                for block in infile.encrypted():
+                    self.write(block, terminate=False)
+                # Write a terminating blank line.
+                self.write()
+
+
+if __name__ == '__main__':
+    arguments = docopt(__doc__, version='encbup 0.1')
+
+    if arguments["--verbose"]:
+        logging.basicConfig(level=logging.DEBUG)
+
+    if arguments["--passphrase"] is None:
+        passphrase = getpass("Please enter a passphrase: ")
+        passphrase_again = getpass("Please confirm the passphrase: ")
+        if passphrase != passphrase_again:
+            sys.exit("The passphrases don't match.")
+    else:
+        passphrase = arguments["--passphrase"]
+
+    try:
+        rounds = int(arguments["--rounds"])
+    except ValueError:
+        sys.exit("Please enter an integer for the value of the rounds.")
+
+    if arguments["--encrypt"]:
+        key = Key(passphrase, arguments["--salt"], rounds=rounds)
+        writer = Writer(arguments["<outfile>"])
+        writer.write_preamble(key)
+        writer.write_files(arguments["<path>"])
+    elif arguments["--decrypt"]:
+        reader = Reader(arguments["<infile>"], arguments["<directory>"])
+        reader.process_stream(passphrase)
