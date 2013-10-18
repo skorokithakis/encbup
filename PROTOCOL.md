@@ -24,3 +24,5 @@ Individual files are encrypted with AES-128 in CBC mode. To ensure that files en
 the same ciphertext, the IV is chosen as the first 16 bytes of the HMAC-SHA512 of the plaintext (using the encryption
 key as a MAC key) and stored along with the ciphertext. The MAC is also stored along with the ciphertext, for
 authenticating the plaintext after decryption, to ensure that it has not been tampered with.
+
+The filename is encrypted in the same way, using the last 16 bytes of the HMAC-SHA512 of the file's plaintext.
