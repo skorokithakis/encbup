@@ -33,9 +33,9 @@ BLOCK_SIZE = 64 * 1024
 
 
 class File:
-    def __init__(self, key, path, filename):
+    def __init__(self, key, root, filename):
         self.block_size = BLOCK_SIZE
-        self._path = path
+        self._root = root
         self._filename = filename
         self._key = key
 
@@ -92,7 +92,7 @@ class File:
 
     @property
     def absolute_path(self):
-        return os.path.join(self._path, self._filename)
+        return os.path.join(self._root, self._filename)
 
     @property
     def relative_path(self):
@@ -115,10 +115,15 @@ class File:
 
     @property
     def as_dict(self):
+        filename = self.encrypted_relative_path
+        h = hmac.new(self._key.key, digestmod=hashlib.sha512)
+        h.update(filename)
+        filename_hmac = h.hexdigest()
         return {
             "plaintext_digest": self.hmac().hexdigest(),
             "size": self.encrypted_size,
-            "filename": self.encrypted_relative_path.encode("hex"),
+            "filename": filename.encode("hex"),
+            "filename_hmac": filename_hmac,
             }
 
 
