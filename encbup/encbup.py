@@ -191,6 +191,9 @@ class Reader:
 
                 # Decrypt the filename.
                 encrypted_filename = metadata["filename"].decode("hex")
+                if hmac.new(key.key, msg=encrypted_filename, digestmod=hashlib.sha512).hexdigest() != metadata["filename_hmac"]:
+                    sys.exit("Invalid filename HMAC, either it is corrupt or someone has tampered with it.")
+
                 cipher = AES.new(key.key, AES.MODE_CBC, IV=encrypted_filename[:16])
                 filename = self.unpad(cipher.decrypt(encrypted_filename[16:]))
                 logging.debug("Decrypting {0}...".format(filename))
@@ -211,9 +214,13 @@ class Reader:
                 plaintext = cipher.decrypt(data)
                 if block_size < BLOCK_SIZE:
                     plaintext = self.unpad(plaintext)
+                h = hmac.new(key.key, digestmod=hashlib.sha512)
+                h.update(plaintext)
                 outfile.write(plaintext)
                 size -= block_size
                 if size == 0:
+                    if h.hexdigest() != metadata["plaintext_digest"]:
+                        sys.exit("Invalid file HMAC, either it is corrupt or someone has tampered with it.")
                     self.file.read(1)  # Skip the newline.
                     state = 0
                     outfile.close()
