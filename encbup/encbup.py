@@ -99,6 +99,12 @@ class File:
         return self._filename
 
     @property
+    def encrypted_absolute_path(self):
+        iv = self.hmac().digest()[-16:]
+        cipher = AES.new(self._key.key, AES.MODE_CBC, IV=iv)
+        return iv + cipher.encrypt(self.pad(self.absolute_path))
+
+    @property
     def encrypted_relative_path(self):
         iv = self.hmac().digest()[-16:]
         cipher = AES.new(self._key.key, AES.MODE_CBC, IV=iv)
@@ -115,7 +121,7 @@ class File:
 
     @property
     def as_dict(self):
-        filename = self.encrypted_relative_path
+        filename = self.encrypted_absolute_path
         h = hmac.new(self._key.key, digestmod=hashlib.sha512)
         h.update(filename)
         filename_hmac = h.hexdigest()
@@ -196,6 +202,11 @@ class Reader:
 
                 cipher = AES.new(key.key, AES.MODE_CBC, IV=encrypted_filename[:16])
                 filename = self.unpad(cipher.decrypt(encrypted_filename[16:]))
+
+                # Strip leading slashes.
+                # TODO: Protect against ../../ etc.
+                if filename.startswith("/"):
+                    filename = filename[1:]
                 logging.debug("Decrypting {0}...".format(filename))
 
                 pathname = os.path.join(self._base_dir, filename)
