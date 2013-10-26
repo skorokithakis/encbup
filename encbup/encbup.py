@@ -242,6 +242,7 @@ class Writer:
     A class for writing encrypted data to a file (or stdout).
     """
     def __init__(self, filename):
+        logging.debug("Outfile is {0}.".format(filename))
         if filename == "-":
             self.file = sys.stdout
         else:
@@ -285,8 +286,10 @@ class Writer:
                 self.write()
 
 
-def main():
-    arguments = docopt(__doc__, version='encbup 0.1')
+def main(args=None):
+    if args is None:
+        args = sys.argv[1:]
+    arguments = docopt(__doc__, argv=args, version='encbup 0.1')
 
     if arguments["--verbose"]:
         logging.basicConfig(level=logging.DEBUG)
