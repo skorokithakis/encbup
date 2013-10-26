@@ -273,7 +273,7 @@ class Writer:
         self.write(json.dumps(key.as_dict))
         self.write(key.contents)
 
-    def write_files(self, paths):
+    def write_files(self, key, paths):
         for path in paths:
             for root, filename in self.walk(path):
                 logging.debug("Encrypting {0}...".format(filename))
@@ -285,7 +285,7 @@ class Writer:
                 self.write()
 
 
-if __name__ == '__main__':
+def main():
     arguments = docopt(__doc__, version='encbup 0.1')
 
     if arguments["--verbose"]:
@@ -308,7 +308,11 @@ if __name__ == '__main__':
         key = Key(passphrase, arguments["--salt"], rounds=rounds)
         writer = Writer(arguments["<outfile>"])
         writer.write_preamble(key)
-        writer.write_files(arguments["<path>"])
+        writer.write_files(key, arguments["<path>"])
     elif arguments["--decrypt"]:
         reader = Reader(arguments["<infile>"], arguments["<directory>"])
         reader.process_stream(passphrase)
+
+
+if __name__ == '__main__':
+    main()
