@@ -217,6 +217,7 @@ class Reader:
 
                 # Read the IV and prepare the cipher.
                 cipher = AES.new(key.key, AES.MODE_CBC, IV=self.file.read(16))
+                h = hmac.new(key.key, digestmod=hashlib.sha512)
                 size = metadata["size"] - 16
                 state = 1
             else:
@@ -225,7 +226,6 @@ class Reader:
                 plaintext = cipher.decrypt(data)
                 if block_size < BLOCK_SIZE:
                     plaintext = self.unpad(plaintext)
-                h = hmac.new(key.key, digestmod=hashlib.sha512)
                 h.update(plaintext)
                 outfile.write(plaintext)
                 size -= block_size
