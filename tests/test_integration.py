@@ -1,6 +1,6 @@
 import os
 import random
-import md5
+from hashlib import md5
 import shutil
 import time
 import tempfile
@@ -16,7 +16,7 @@ def scandir(directory):
     for root, dirs, files in os.walk(directory):
         for filename in files:
             name = os.path.join(root, filename)
-            checksum = md5.new(open(name).read()).hexdigest()
+            checksum = md5(open(name).read()).hexdigest()
             checksums[checksum] = name
     return checksums
 
@@ -70,7 +70,6 @@ class TestIntegration(unittest.TestCase):
             handle.close()
 
     def test_idempotence(self):
-        print self.backup_filename
         writer = Writer(self.backup_filename)
         key = Key(self.passphrase, rounds=2)
         writer.write_preamble(key)

@@ -267,10 +267,10 @@ class Writer:
         """
         self.file.write(line)
         if terminate:
-            self.file.write("\n")
+            self.file.write("\n".encode("ascii"))
 
     def write_preamble(self, key):
-        self.write(str(PROTOCOL_VERSION))
+        self.write(str(PROTOCOL_VERSION).encode("ascii"))
         self.write(json.dumps(key.as_dict))
         self.write(key.contents)
 
