@@ -16,12 +16,15 @@ def scandir(directory):
     for root, dirs, files in os.walk(directory):
         for filename in files:
             name = os.path.join(root, filename)
-            checksum = md5(open(name).read()).hexdigest()
+            handle = open(name, "rb")
+            checksum = md5(handle.read()).hexdigest()
+            handle.close()
             checksums[checksum] = name
     return checksums
 
 
 class TestIntegration(unittest.TestCase):
+
     def setUp(self):
         self.source_dir = tempfile.mkdtemp()
         self.backup_dir = tempfile.mkdtemp()

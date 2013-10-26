@@ -14,6 +14,7 @@ Options:
 """
 
 import base64
+import binascii
 import hmac
 import hashlib
 import json
@@ -30,6 +31,15 @@ from getpass import getpass
 
 PROTOCOL_VERSION = 1
 BLOCK_SIZE = 64 * 1024
+ENCODING = "utf-8"
+
+
+def loads(data):
+    return json.loads(data.decode(ENCODING))
+
+
+def dumps(data):
+    return json.dumps(data).encode(ENCODING)
 
 
 class File:
@@ -42,7 +52,8 @@ class File:
     def read_blocks(self, block_size=None):
         if block_size is None:
             block_size = self.block_size
-        infile = open(self.absolute_path)
+
+        infile = open(self.absolute_path, "rb")
         while True:
             block = infile.read(block_size)
             if block:
@@ -56,15 +67,13 @@ class File:
         Pad `data` as per PKCS#7.
         """
         length = 16 - (len(data) % 16)
-        return data + chr(length) * length
+        return data + (chr(length) * length).encode(ENCODING)
 
     def hmac(self):
         if getattr(self, "_hmac", None) is None:
             h = hmac.new(self._key.key, digestmod=hashlib.sha512)
-            infile = open(self.absolute_path)
             for block in self.read_blocks():
                 h.update(block)
-            infile.close()
             self._hmac = h
         return self._hmac
 
@@ -82,7 +91,7 @@ class File:
             else:
                 yield self._cipher.encrypt(block)
         else:
-            yield self.pad("")
+            yield self.pad(b"")
 
         infile.close()
 
@@ -102,7 +111,7 @@ class File:
     def encrypted_absolute_path(self):
         iv = self.hmac().digest()[-16:]
         cipher = AES.new(self._key.key, AES.MODE_CBC, IV=iv)
-        return iv + cipher.encrypt(self.pad(self.absolute_path))
+        return iv + cipher.encrypt(self.pad(self.absolute_path.encode(ENCODING)))
 
     @property
     def encrypted_relative_path(self):
@@ -125,10 +134,11 @@ class File:
         h = hmac.new(self._key.key, digestmod=hashlib.sha512)
         h.update(filename)
         filename_hmac = h.hexdigest()
+        filename = binascii.hexlify(filename)
         return {
             "plaintext_digest": self.hmac().hexdigest(),
             "size": self.encrypted_size,
-            "filename": filename.encode("hex"),
+            "filename": filename.decode("ascii"),
             "filename_hmac": filename_hmac,
             }
 
@@ -154,7 +164,7 @@ class Key:
 
     @property
     def contents(self):
-        return json.dumps({"digest": self.hexdigest, "salt": self.salt, "rounds": self.rounds})
+        return dumps({"digest": self.hexdigest, "salt": self.salt.decode(ENCODING), "rounds": self.rounds})
 
 
 class Reader:
@@ -162,14 +172,17 @@ class Reader:
         if filename == "-":
             self.file = sys.stdin
         else:
-            self.file = open(filename)
+            self.file = open(filename, "rb")
         self._base_dir = base_dir
 
     def unpad(self, data):
         """
         Unpad `data` as per PKCS#7.
         """
-        length = ord(data[-1])
+        try:
+            length = ord(data[-1])
+        except TypeError:
+            length = data[-1]
         return data[:-length]
 
     def process_stream(self, passphrase):
@@ -181,9 +194,9 @@ class Reader:
             sys.exit("Unsupported protocol version.")
 
         # Read keyfile.
-        metadata = json.loads(self.file.readline())
-        keyfile = json.loads(self.file.read(metadata["size"] + 1))
-        key = Key(passphrase, keyfile["salt"], rounds=keyfile["rounds"])
+        metadata = loads(self.file.readline())
+        keyfile = loads(self.file.read(metadata["size"] + 1))
+        key = Key(passphrase, keyfile["salt"].encode(ENCODING), rounds=keyfile["rounds"])
         if key.hexdigest != keyfile["digest"]:
             sys.exit("Wrong passphrase.")
 
@@ -193,15 +206,15 @@ class Reader:
                 metadata = self.file.readline()
                 if not metadata:
                     break
-                metadata = json.loads(metadata)
+                metadata = loads(metadata)
 
                 # Decrypt the filename.
-                encrypted_filename = metadata["filename"].decode("hex")
+                encrypted_filename = binascii.unhexlify(metadata["filename"])
                 if hmac.new(key.key, msg=encrypted_filename, digestmod=hashlib.sha512).hexdigest() != metadata["filename_hmac"]:
                     sys.exit("Invalid filename HMAC, either it is corrupt or someone has tampered with it.")
 
                 cipher = AES.new(key.key, AES.MODE_CBC, IV=encrypted_filename[:16])
-                filename = self.unpad(cipher.decrypt(encrypted_filename[16:]))
+                filename = self.unpad(cipher.decrypt(encrypted_filename[16:])).decode(ENCODING)
 
                 # Strip leading slashes.
                 # TODO: Protect against ../../ etc.
@@ -261,17 +274,17 @@ class Writer:
                     relpath = os.path.relpath(os.path.join(dirpath, filename), path)
                     yield path, relpath
 
-    def write(self, line="", terminate=True):
+    def write(self, line=b"", terminate=True):
         """
         Write a newline-terminated line to a file.
         """
         self.file.write(line)
         if terminate:
-            self.file.write("\n".encode("ascii"))
+            self.file.write("\n".encode(ENCODING))
 
     def write_preamble(self, key):
-        self.write(str(PROTOCOL_VERSION).encode("ascii"))
-        self.write(json.dumps(key.as_dict))
+        self.write(str(PROTOCOL_VERSION).encode(ENCODING))
+        self.write(dumps(key.as_dict))
         self.write(key.contents)
 
     def write_files(self, key, paths):
@@ -279,7 +292,7 @@ class Writer:
             for root, filename in self.walk(path):
                 logging.debug("Encrypting {0}...".format(filename))
                 infile = File(key, root, filename)
-                self.write(json.dumps(infile.as_dict))
+                self.write(dumps(infile.as_dict))
                 for block in infile.encrypted():
                     self.write(block, terminate=False)
                 # Write a terminating blank line.
@@ -290,6 +303,7 @@ class Writer:
 def main(args=None):
     if args is None:
         args = sys.argv[1:]
+
     arguments = docopt(__doc__, argv=args, version='encbup 0.1')
 
     if arguments["--verbose"]:
