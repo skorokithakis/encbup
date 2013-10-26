@@ -48,7 +48,8 @@ class File:
             if block:
                 yield block
             else:
-                return
+                break
+        infile.close()
 
     def pad(self, data):
         """
@@ -84,7 +85,6 @@ class File:
             yield self.pad("")
 
         infile.close()
-        return
 
     @property
     def iv(self):
@@ -192,7 +192,7 @@ class Reader:
                 # Read metadata.
                 metadata = self.file.readline()
                 if not metadata:
-                    return
+                    break
                 metadata = json.loads(metadata)
 
                 # Decrypt the filename.
@@ -235,6 +235,7 @@ class Reader:
                     self.file.read(1)  # Skip the newline.
                     state = 0
                     outfile.close()
+        self.file.close()
 
 
 class Writer:
@@ -242,7 +243,6 @@ class Writer:
     A class for writing encrypted data to a file (or stdout).
     """
     def __init__(self, filename):
-        logging.debug("Outfile is {0}.".format(filename))
         if filename == "-":
             self.file = sys.stdout
         else:
@@ -284,6 +284,7 @@ class Writer:
                     self.write(block, terminate=False)
                 # Write a terminating blank line.
                 self.write()
+        self.file.close()
 
 
 def main(args=None):
