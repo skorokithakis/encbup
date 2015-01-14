@@ -8,7 +8,7 @@ through untrusted connections.
 * File contents and filenames are considered sensitive data.
 * Other file metadata is potentially not considered sensitive data.
 * The number of files is not considered sensitive data.
-* Encrypting a file with a given passphrase should always yield the same plaintext. This is to allow per-file
+* Encrypting a file with a given passphrase should always yield the same ciphertext. This is to allow per-file
   deduplication.
 
 # The protocol
